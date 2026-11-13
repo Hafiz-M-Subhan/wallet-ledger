@@ -1,0 +1,69 @@
+﻿--- get_balance
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Index Scan using balances_pkey on balances (actual time=0.066..0.068 rows=1 loops=1)
+   Index Cond: (user_id = 'seed_0000001'::text)
+   Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=67
+ Planning Time: 1.599 ms
+ Execution Time: 0.238 ms
+(7 rows)
+
+BEGIN
+--- credit
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ CTE Scan on b (actual time=0.264..0.268 rows=1 loops=1)
+   Buffers: shared hit=12
+   CTE b
+     ->  Insert on balances cur (actual time=0.261..0.263 rows=1 loops=1)
+           Conflict Resolution: UPDATE
+           Conflict Arbiter Indexes: balances_pkey
+           Tuples Inserted: 0
+           Conflicting Tuples: 1
+           Buffers: shared hit=12
+           ->  Result (actual time=0.003..0.003 rows=1 loops=1)
+   CTE l
+     ->  Insert on ledger (actual time=1.349..1.349 rows=0 loops=1)
+           Buffers: shared hit=56 read=4 dirtied=1
+           ->  CTE Scan on b b_1 (actual time=0.449..0.450 rows=1 loops=1)
+                 Buffers: shared hit=7 read=3
+ Planning:
+   Buffers: shared hit=5 read=1
+ Planning Time: 1.127 ms
+ Execution Time: 3.342 ms
+(19 rows)
+
+--- debit
+                                                  QUERY PLAN                                                   
+---------------------------------------------------------------------------------------------------------------
+ Append (actual time=0.136..0.145 rows=1 loops=1)
+   Buffers: shared hit=6
+   CTE b
+     ->  Update on balances balances_1 (actual time=0.130..0.133 rows=1 loops=1)
+           Buffers: shared hit=6
+           ->  Index Scan using balances_pkey on balances balances_1 (actual time=0.051..0.053 rows=1 loops=1)
+                 Index Cond: (user_id = 'seed_0000001'::text)
+                 Filter: (balance >= 4000)
+                 Buffers: shared hit=4
+   CTE l
+     ->  Insert on ledger (actual time=0.075..0.075 rows=0 loops=1)
+           Buffers: shared hit=7
+           ->  CTE Scan on b b_1 (actual time=0.009..0.009 rows=1 loops=1)
+                 Buffers: shared hit=1
+   ->  CTE Scan on b (actual time=0.135..0.138 rows=1 loops=1)
+         Buffers: shared hit=6
+   ->  Result (actual time=0.002..0.003 rows=0 loops=1)
+         One-Time Filter: (NOT (InitPlan 3).col1)
+         InitPlan 3
+           ->  CTE Scan on b b_2 (actual time=0.001..0.001 rows=1 loops=1)
+         ->  Index Scan using balances_pkey on balances (never executed)
+               Index Cond: (user_id = 'seed_0000001'::text)
+ Planning:
+   Buffers: shared hit=11
+ Planning Time: 0.925 ms
+ Execution Time: 0.499 ms
+(26 rows)
+
+ROLLBACK

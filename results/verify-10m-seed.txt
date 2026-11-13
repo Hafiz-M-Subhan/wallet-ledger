@@ -1,0 +1,29 @@
+﻿Timing is on.
+1. users whose balances row disagrees with sum(credits) - sum(debits)
+ mismatched_users 
+------------------
+                0
+(1 row)
+
+Time: 1894.025 ms (00:01.894)
+2. negative balances
+ negative_balances 
+-------------------
+                 0
+(1 row)
+
+Time: 12.620 ms
+3. ledger rows whose balance_after is not the running total (balance below 0 at any point is caught here too)
+ bad_running_totals 
+--------------------
+                  0
+(1 row)
+
+Time: 18388.742 ms (00:18.389)
+4. last balance_after per user vs balances
+ last_entry_mismatch 
+---------------------
+                   0
+(1 row)
+
+Time: 2020.582 ms (00:02.021)

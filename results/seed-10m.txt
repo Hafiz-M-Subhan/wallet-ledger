@@ -1,0 +1,74 @@
+﻿
+psql:/migrations/001_init.sql:27: NOTICE:  relation "ledger" already exists, skipping
+psql:/migrations/001_init.sql:31: NOTICE:  relation "ledger_user_id_id_idx" already exists, skipping
+psql:/migrations/001_init.sql:57: NOTICE:  relation "balances" already exists, skipping
+psql:/migrations/001_init.sql:75: NOTICE:  relation "idempotency_keys" already exists, skipping
+Timing is on.
+SET
+Time: 0.638 ms
+SET
+Time: 0.311 ms
+SET
+Time: 0.901 ms
+SET
+Time: 0.435 ms
+Time: 6.219 ms
+== planning row counts per user
+ setseed 
+---------
+ 
+(1 row)
+
+Time: 1.403 ms
+CREATE TABLE
+Time: 13.610 ms
+INSERT 0 100000
+Time: 680.196 ms
+Time: 39.304 ms
+UPDATE 99990
+Time: 920.192 ms
+Time: 79.713 ms
+UPDATE 99990
+Time: 1286.553 ms (00:01.287)
+ users  | planned_rows | max_rows_per_user | median_rows_per_user | users_with_100k_plus 
+--------+--------------+-------------------+----------------------+----------------------
+ 100000 |     10070988 |            179190 |                   60 |                   10
+(1 row)
+
+Time: 70.325 ms
+BEGIN
+Time: 0.286 ms
+DROP INDEX
+Time: 7.162 ms
+== generating ledger rows
+INSERT 0 10070988
+Time: 94504.308 ms (01:34.504)
+== building balances
+INSERT 0 100000
+Time: 6145.313 ms (00:06.145)
+== rebuilding index
+CREATE INDEX
+Time: 13527.536 ms (00:13.528)
+COMMIT
+Time: 4.133 ms
+== vacuum / analyze
+VACUUM
+Time: 1792.167 ms (00:01.792)
+VACUUM
+Time: 139.254 ms
+== summary
+ ledger_rows | ledger_users 
+-------------+--------------
+    10070988 |       100000
+(1 row)
+
+Time: 3162.457 ms (00:03.162)
+ balance_rows | min_balance 
+--------------+-------------
+       100000 |          12
+(1 row)
+
+Time: 30.023 ms
+Seed finished in 123s (rows=10000000 users=100000 whales=10)
+
+

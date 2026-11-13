@@ -1,0 +1,130 @@
+name: wallet-ledger
+
+x-db-env: &db-env
+  PGHOST: db
+  PGUSER: ledger
+  PGPASSWORD: ledger
+  PGDATABASE: ledger
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: ledger
+      # C collation: user ids are ASCII, and byte-order comparison makes the
+      # text primary key / index faster than locale-aware collation.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - max_connections=200
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_wal_size=8GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_compression=lz4
+      - -c
+      - wal_buffers=64MB
+      # Durability stays ON: synchronous_commit=on and fsync=on (defaults).
+      # A 200 response means the ledger row is on disk.
+    shm_size: 1gb
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./seed:/seed:ro
+      - ./migrations:/migrations:ro
+      - ./scripts:/scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      API_TOKEN: ${API_TOKEN:-recruitment-test-token}
+      DATABASE_URL: postgres://ledger:ledger@db:5432/ledger?sslmode=disable
+      PORT: "8080"
+      DB_MAX_CONNS: "48"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/api", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    stop_grace_period: 25s
+
+  # --- optional tools, not started by `docker compose up` -------------------
+
+  # docker compose --profile seed run --rm seed
+  seed:
+    profiles: ["seed"]
+    image: postgres:17-alpine
+    environment:
+      <<: *db-env
+      SEED_ROWS: ${SEED_ROWS:-10000000}
+      SEED_USERS: ${SEED_USERS:-100000}
+      SEED_WHALES: ${SEED_WHALES:-10}
+    entrypoint: ["sh", "/seed/seed.sh"]
+    volumes:
+      - ./seed:/seed:ro
+      - ./migrations:/migrations:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # docker compose --profile tools run --rm tests
+  tests:
+    profiles: ["tools"]
+    build:
+      context: .
+      target: tools
+    environment:
+      BASE_URL: http://api:8080
+      API_TOKEN: ${API_TOKEN:-recruitment-test-token}
+      DATABASE_URL: postgres://ledger:ledger@db:5432/ledger?sslmode=disable
+    entrypoint: ["/app/e2e.test", "-test.v", "-test.count=1"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # docker compose --profile tools run --rm loadtest [-duration 60s ...]
+  loadtest:
+    profiles: ["tools"]
+    build:
+      context: .
+      target: tools
+    environment:
+      BASE_URL: http://api:8080
+      API_TOKEN: ${API_TOKEN:-recruitment-test-token}
+    entrypoint: ["/app/loadtest"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,20 @@
+﻿
+--- PASS: TestAuthOnEveryEndpoint (0.05s)
+--- PASS: TestHealth (0.00s)
+--- PASS: TestInputValidation (0.06s)
+--- PASS: TestContract (0.04s)
+--- PASS: TestIdempotencyKey (0.05s)
+--- PASS: TestLedgerRowsAreImmutable (0.03s)
+--- PASS: TestConcurrentDebitsNeverOverdraw (1.10s)
+--- PASS: TestConcurrentDrain (0.14s)
+--- PASS: TestNoLostUpdates (0.35s)
+--- PASS: TestMixedRaceMatchesAcknowledgedOps (0.72s)
+--- PASS: TestReadYourWrites (0.46s)
+    concurrency_test.go:302: cold user alone:          p50=3.276862ms p99=13.285973ms
+    concurrency_test.go:303: cold user with hot load:  p50=7.499785ms p99=41.938706ms (hot user served 12943 requests, 
+0 failed)
+--- PASS: TestHotUserDoesNotBlockOthers (2.93s)
+--- PASS: TestZZReconcileWholeLedger (3.71s)
+PASS
+
+
