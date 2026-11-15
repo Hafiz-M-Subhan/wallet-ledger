@@ -2,17 +2,137 @@
 
 An HTTP/JSON wallet ledger written in Go on PostgreSQL 17. It supports `credit`, `debit` and `get_balance` for many users, stays consistent under heavy concurrency, and keeps per-request latency flat at 10M+ ledger rows.
 
-- [Quick start](#quick-start)
-- [API](#api)
-- [Design](#design)
-- [Concurrency and consistency](#concurrency-and-consistency)
-- [Query plans](#query-plans)
-- [Tests](#tests)
-- [Load test results](#load-test-results)
-- [Seed](#seed)
-- [Limits, scaling and what I'd do next](#limits-scaling-and-what-id-do-next)
+## What is this for?
+
+This is my submission for the **Niobi Wallet Ledger API recruitment test**. The test asks for a small "bank" service that:
+
+- keeps a **money ledger** for many users: every credit and debit is stored forever as one row;
+- answers three questions over HTTP: **add money** (`POST /credit`), **take money out** (`POST /debit`, never below zero), and **what is my balance** (`GET /balance/{user_id}`);
+- stays **100% correct** when many clients hit it at the same moment (no negative balances, no lost updates, balances always equal the ledger);
+- stays **fast** with **10 million+ ledger rows** in the database.
+
+| | |
+|---|---|
+| **Language** | Go 1.24 (standard library HTTP server, `pgx` driver) |
+| **Database** | PostgreSQL 17 |
+| **Run** | `docker compose up` (API on `http://localhost:8080`) |
+| **Data** | seed script: 10,070,988 ledger rows, 100,000 users, 10 users with 100k+ rows, in about 2 minutes |
+| **Speed (10M rows, laptop)** | about 6,400 req/s; p99 27 ms for balance, 41 ms for credit and debit; 0 failures |
+
+**Contents:** [Requirements checklist](#requirements-checklist) · [How to use it, step by step](#how-to-use-it-step-by-step) · [Quick start](#quick-start) · [API](#api) · [Design](#design) · [Concurrency and consistency](#concurrency-and-consistency) · [Query plans](#query-plans) · [Tests](#tests) · [Load test results](#load-test-results) · [Seed](#seed) · [Limits, scaling and what I'd do next](#limits-scaling-and-what-id-do-next) · [Project layout](#project-layout)
 
 ---
+
+## Requirements checklist
+
+Every requirement in the brief, and where it is met.
+
+| Requirement | Status | Where |
+|---|:---:|---|
+| `docker compose up` starts API + database, no other steps | ✅ | [docker-compose.yml](docker-compose.yml); the schema is applied automatically at API start-up |
+| Serves on port 8080 | ✅ | [docker-compose.yml](docker-compose.yml) |
+| Client-server SQL database (not SQLite) | ✅ | PostgreSQL 17 |
+| `API_TOKEN` env var, `recruitment-test-token` in compose, overridable | ✅ | [docker-compose.yml](docker-compose.yml): `API_TOKEN: ${API_TOKEN:-recruitment-test-token}` |
+| Bearer token on every endpoint, 401 before any DB access | ✅ | [internal/httpapi/server.go](internal/httpapi/server.go), tested in [server_test.go](internal/httpapi/server_test.go) |
+| Token not hard-coded, logged or returned; constant-time compare | ✅ | [internal/httpapi/auth.go](internal/httpapi/auth.go) (SHA-256 + `subtle.ConstantTimeCompare`) |
+| `POST /credit`, `POST /debit`, `GET /balance/{user_id}` with the exact JSON shapes | ✅ | [API](#api) |
+| Input rules (`user_id` 1–64 of `A-Za-z0-9_-`; `amount` integer 1..1,000,000,000; unknown fields ignored) | ✅ | [internal/httpapi/validate.go](internal/httpapi/validate.go) |
+| Error shape and codes 400 / 401 / 404 / 409 | ✅ | [API](#api) |
+| Immutable ledger rows (id, user_id, type, amount > 0, server timestamp) | ✅ | [migrations/001_init.sql](migrations/001_init.sql), with a trigger that blocks UPDATE and DELETE |
+| Balance = Σcredits − Σdebits, checked with SQL | ✅ | [seed/verify.sql](seed/verify.sql), `TestZZReconcileWholeLedger` |
+| `get_balance` fast at 10M+ rows (no table or history scans) | ✅ | primary-key lookup; see [Query plans](#query-plans) |
+| Seed: 10M+ rows, 100k+ users, some users with 100k+ rows, never negative, time stated | ✅ | [seed/seed.sql](seed/seed.sql); [Seed](#seed) (123 s) |
+| Two concurrent debits of 60 vs 100 → one 200 + one 409 | ✅ | `TestConcurrentDebitsNeverOverdraw` (100 rounds) |
+| 1,000 concurrent credits of 100 → +100,000 exactly | ✅ | `TestNoLostUpdates` |
+| Atomic writes, crash-safe | ✅ | one SQL statement per write = one transaction |
+| Read-your-writes | ✅ | `TestReadYourWrites` |
+| Hot user does not slow other users | ✅ | per-user queue; `TestHotUserDoesNotBlockOthers`, hot-phase load test |
+| Deadlocks/conflicts handled, never a 500 or a wrong balance | ✅ | retries with backoff in [internal/ledger/store.go](internal/ledger/store.go) |
+| Load test, p50/p99 per endpoint at 10M rows, ~100 clients, mixed + hot user | ✅ | [cmd/loadtest](cmd/loadtest/main.go); [Load test results](#load-test-results) |
+| 1M vs 10M comparison | ✅ | [Load test results](#load-test-results) |
+| `EXPLAIN` plans for credit, debit and get_balance | ✅ | [Query plans](#query-plans) |
+| README: how to run, design, plans, limits, next steps | ✅ | this file |
+| Extras: `Idempotency-Key`, health endpoint, graceful shutdown | ✅ | [API](#api) |
+
+## How to use it, step by step
+
+You only need **Docker Desktop** (or Docker Engine with the Compose plugin). Go and Postgres don't need to be installed on your machine.
+
+**1. Get the code and start the service**
+
+```bash
+git clone <this repository URL>
+cd wallet-ledger
+docker compose up -d          # builds the API image, starts Postgres and the API
+docker compose ps             # both services should show "healthy"
+```
+
+The first build takes a minute or two. The database schema is created automatically.
+
+**2. Load the 10 million row test data** (optional, about 2 minutes)
+
+```bash
+docker compose --profile seed run --rm seed
+```
+
+Smaller data set: `SEED_ROWS=1000000 SEED_WHALES=2 docker compose --profile seed run --rm seed`.
+
+**3. Try the API**
+
+```bash
+TOKEN=recruitment-test-token
+
+# add 100.00 (amounts are integers in cents)
+curl -s -X POST localhost:8080/credit -H "Authorization: Bearer $TOKEN" -d '{"user_id":"alice","amount":10000}'
+# -> {"user_id":"alice","balance":10000}
+
+# take out 40.00
+curl -s -X POST localhost:8080/debit -H "Authorization: Bearer $TOKEN" -d '{"user_id":"alice","amount":4000}'
+# -> {"user_id":"alice","balance":6000}
+
+# read the balance
+curl -s localhost:8080/balance/alice -H "Authorization: Bearer $TOKEN"
+# -> {"user_id":"alice","balance":6000}
+
+# try to take out more than she has
+curl -s -X POST localhost:8080/debit -H "Authorization: Bearer $TOKEN" -d '{"user_id":"alice","amount":999999}'
+# -> 409 {"error":"insufficient_funds","message":"balance is lower than the debit amount"}
+
+# no token
+curl -s localhost:8080/balance/alice
+# -> 401 {"error":"unauthorized","message":"missing or invalid bearer token"}
+```
+
+On Windows PowerShell, use `curl.exe` and put the JSON body in a file (`-d "@body.json"`), or use Git Bash.
+
+**4. Run the tests** (end-to-end, concurrency and whole-ledger reconciliation)
+
+```bash
+docker compose --profile tools run --rm tests
+```
+
+**5. Run the load test** (100 concurrent clients: 60 s mixed traffic, then 30 s with one hot user)
+
+```bash
+docker compose --profile tools run --rm loadtest
+```
+
+**6. Check that every balance matches the ledger**
+
+```bash
+docker compose exec db psql -U ledger -d ledger -f /seed/verify.sql      # all checks must return 0
+docker compose exec db psql -U ledger -d ledger -f /scripts/explain.sql  # query plans
+```
+
+In Git Bash on Windows, run `export MSYS_NO_PATHCONV=1` first. Otherwise Git Bash rewrites `/seed/...` into a Windows path.
+
+**7. Use a different token, or stop and reset**
+
+```bash
+API_TOKEN=my-secret docker compose up -d   # every client must then send this token
+docker compose down                        # stop, keep the data
+docker compose down -v                     # stop and delete all data
+```
 
 ## Quick start
 
